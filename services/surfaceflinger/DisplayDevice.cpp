@@ -139,6 +139,10 @@ DisplayDevice::DisplayDevice(
     setProjection(panelOrientation, mViewport, mFrame);
 }
 
+#ifdef MTK_MT6589
+    mLayersSwapRequired = false;
+#endif
+
 DisplayDevice::~DisplayDevice() {
     if (mSurface != EGL_NO_SURFACE) {
         eglDestroySurface(mDisplay, mSurface);
