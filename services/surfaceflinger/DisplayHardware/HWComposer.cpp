@@ -700,7 +700,16 @@ status_t HWComposer::createWorkList(int32_t id, size_t numLayers) {
                 &disp.framebufferTarget->displayFrame;
             disp.framebufferTarget->acquireFenceFd = -1;
             disp.framebufferTarget->releaseFenceFd = -1;
+#ifdef MTK_MT6589
+	    disp.framebufferTarget->ext.connectApi = -1;
+            disp.framebufferTarget->ext.identity = -1;
+            disp.framebufferTarget->ext.width = disp.width;
+            disp.framebufferTarget->ext.height = disp.height;
+            disp.framebufferTarget->ext.stride = disp.width;
+            disp.framebufferTarget->ext.format = disp.format;
+#else
             disp.framebufferTarget->planeAlpha = 0xFF;
+#endif
         }
         if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_0)) {
             disp.list->retireFenceFd = -1;
@@ -734,6 +743,13 @@ status_t HWComposer::setFramebufferTarget(int32_t id,
     disp.fbTargetHandle = buf->handle;
     disp.framebufferTarget->handle = disp.fbTargetHandle;
     disp.framebufferTarget->acquireFenceFd = acquireFenceFd;
+
+#ifdef MTK_MT6589
+    disp.framebufferTarget->ext.width = buf->width;
+    disp.framebufferTarget->ext.height = buf->height;
+    disp.framebufferTarget->ext.stride = buf->stride;
+    disp.framebufferTarget->ext.format = buf->format;
+#endif
     return NO_ERROR;
 }
 
@@ -900,6 +916,7 @@ sp<Fence> HWComposer::getAndResetReleaseFence(int32_t id) {
 status_t HWComposer::commit() {
     int err = NO_ERROR;
     if (mHwc) {
+#ifdef OLD_HWC_API
         if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_0)) {
             if (!hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_1)) {
                 // On version 1.0, the OpenGL ES target surface is communicated
@@ -908,25 +925,49 @@ status_t HWComposer::commit() {
                 mLists[0]->dpy = eglGetCurrentDisplay();
                 mLists[0]->sur = eglGetCurrentSurface(EGL_DRAW);
             }
-            for (size_t i=VIRTUAL_DISPLAY_ID_BASE; i<mNumDisplays; i++) {
-                DisplayData& disp(mDisplayData[i]);
-                if (disp.outbufHandle) {
-                    mLists[i]->outbuf = disp.outbufHandle;
-                    mLists[i]->outbufAcquireFenceFd =
+#else
+        if (!hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_1)) {
+            // On version 1.0, the OpenGL ES target surface is communicated
+            // by the (dpy, sur) fields and we are guaranteed to have only
+            // a single display.
+            mLists[0]->dpy = eglGetCurrentDisplay();
+            mLists[0]->sur = eglGetCurrentSurface(EGL_DRAW);
+#endif
+        }
+
+        for (size_t i=VIRTUAL_DISPLAY_ID_BASE; i<mNumDisplays; i++) {
+            DisplayData& disp(mDisplayData[i]);
+            if (disp.outbufHandle) {
+                mLists[i]->outbuf = disp.outbufHandle;
+                mLists[i]->outbufAcquireFenceFd =
                         disp.outbufAcquireFence->dup();
-                }
             }
-            err = mHwc->set(mHwc, mNumDisplays, mLists);
+        }
+#ifdef MTK_MT6589
+	    for (size_t i=0 ; i<mNumDisplays ; i++) {
+	        DisplayData& disp(mDisplayData[i]);
+		if (disp.list && mFlinger->getAndClearLayersSwapRequired(i)) {
+		    disp.list->flags |= HWC_SWAP_REQUIRED;
+		}
+	    }
+#endif
+#ifdef OLD_HWC_API
+        if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_0)) {
+            err = hwcSet(mHwc, mLists[0]->dpy, mLists[0]->sur, mNumDisplays,
+                    const_cast<hwc_display_contents_1_t**>(mLists));
         } else {
             err = hwcSet(mHwc, eglGetCurrentDisplay(), eglGetCurrentSurface(EGL_DRAW), mNumDisplays,
                     const_cast<hwc_display_contents_1_t**>(mLists));
         }
-
+#else
+        err = mHwc->set(mHwc, mNumDisplays, mLists);
+#endif
         for (size_t i=0 ; i<mNumDisplays ; i++) {
             DisplayData& disp(mDisplayData[i]);
             disp.lastDisplayFence = disp.lastRetireFence;
             disp.lastRetireFence = Fence::NO_FENCE;
             if (disp.list) {
+#ifdef OLD_HWC_API
                 if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_0)) {
                     if (disp.list->retireFenceFd != -1) {
                         disp.lastRetireFence = new Fence(disp.list->retireFenceFd);
@@ -934,11 +975,24 @@ status_t HWComposer::commit() {
                     }
                 }
                 hwcFlags(mHwc, disp.list) &= ~HWC_GEOMETRY_CHANGED;
+#else
+                if (disp.list->retireFenceFd != -1) {
+                    disp.lastRetireFence = new Fence(disp.list->retireFenceFd);
+                    disp.list->retireFenceFd = -1;
+                }
+                disp.list->flags &= ~HWC_GEOMETRY_CHANGED;
+#endif
+#ifdef MTK_MT6589
+                hwcFlags(mHwc, disp.list) &=
+			~(HWC_SWAP_REQUIRED | HWC_LAYERSCREENSHOT_EXIST |
+			  HWC_SCREEN_FROZEN | HWC_ORIENTATION_MASK);
+#endif
             }
         }
     }
     return (status_t)err;
 }
+
 
 status_t HWComposer::release(int disp) {
     LOG_FATAL_IF(disp >= VIRTUAL_DISPLAY_ID_BASE);
@@ -1203,6 +1257,16 @@ public:
         }
 
     }
+#ifdef MTK_MT6589
+    virtual int getMva() { return 0; }
+    virtual void setLayerType(uint32_t type) { }
+    virtual void setSecure(bool secure) { }
+    virtual void setDirty(bool dirty) { }
+    virtual void setConnectedApi(int32_t api) { }
+    virtual void setIdentity(int32_t id) { }
+    virtual void setFillColor(struct hwc_color color) { }
+    virtual void setMatrix(const Transform& tr) { }
+#endif
 };
 // #endif // !HWC_REMOVE_DEPRECATED_VERSIONS
 
@@ -1235,7 +1299,9 @@ public:
     }
     virtual void setPlaneAlpha(uint8_t alpha) {
         if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_2)) {
+#ifndef MTK_MT6589
             getLayer()->planeAlpha = alpha;
+#endif
         } else {
             if (alpha < 0xFF) {
                 getLayer()->flags |= HWC_SKIP_LAYER;
@@ -1254,7 +1320,17 @@ public:
         l->visibleRegionScreen.rects = NULL;
         l->acquireFenceFd = -1;
         l->releaseFenceFd = -1;
+#ifdef MTK_MT6589
+        getLayer()->ext.connectApi = -1;
+        getLayer()->ext.identity = -1;
+        getLayer()->ext.width = 0;
+        getLayer()->ext.height = 0;
+        getLayer()->ext.stride = 0;
+        getLayer()->ext.format = 0;
+#else
         l->planeAlpha = 0xFF;
+#endif
+
     }
     virtual void setSkip(bool skip) {
         if (skip) {
@@ -1328,6 +1404,13 @@ public:
             getLayer()->handle = 0;
         } else {
             getLayer()->handle = buffer->handle;
+#ifdef MTK_MT6589
+            getLayer()->ext.width = buffer->width;
+            getLayer()->ext.height = buffer->height;
+            getLayer()->ext.stride = buffer->stride;
+            getLayer()->ext.format = buffer->format;
+            getLayer()->ext.mva = buffer->getMva();
+#endif
         }
     }
     virtual void onDisplayed() {
@@ -1342,6 +1425,40 @@ public:
 
         getLayer()->acquireFenceFd = -1;
     }
+
+#ifdef MTK_MT6589
+    virtual int getMva() {
+        return getLayer()->ext.mva;
+    }
+    virtual void setLayerType(uint32_t type) {
+    }
+    virtual void setSecure(bool secure) {
+    }
+    virtual void setDirty(bool dirty) {
+		if (dirty)
+			getLayer()->flags |= HWC_DIRTY_LAYER;
+		else
+			getLayer()->flags &= ~HWC_DIRTY_LAYER;
+    }
+    virtual void setConnectedApi(int32_t api) {
+        getLayer()->ext.connectApi = api;
+    }
+    virtual void setIdentity(int32_t id) {
+        getLayer()->ext.identity = id;
+    }
+    virtual void setFillColor(struct hwc_color color) {
+        getLayer()->ext.fillColor = color;
+    }
+    virtual void setMatrix(const Transform& tr) {
+        float *m = getLayer()->ext.transformMatrix;
+        for (int i = 0, j = 0; i < 9; i += 3, j++) {
+            m[i + 0] = tr[0][j];
+            m[i + 1] = tr[1][j];
+            m[i + 2] = tr[2][j];
+        }
+    }
+#endif
+
 };
 
 /*

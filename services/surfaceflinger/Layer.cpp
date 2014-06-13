@@ -49,9 +49,16 @@
 #include <gralloc_priv.h>
 #endif
 
+#ifdef MTK_MT6589
+#include <hardware/hwcomposer.h>
+#endif
+
 #define DEBUG_RESIZE    0
 
 namespace android {
+#ifdef MTK_MT6589
+int32_t Layer::sIdentity = 1;
+#endif
 
 // ---------------------------------------------------------------------------
 
@@ -84,6 +91,9 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
         mHasSurface(false),
         mClientRef(client),
         mTransformHint(0)
+#ifdef MTK_MT6589
+	, mIdentity(uint32_t(android_atomic_inc(&sIdentity)))
+#endif
 {
     mCurrentCrop.makeInvalid();
     mFlinger->getRenderEngine().genTextures(1, &mTextureName);
@@ -108,6 +118,14 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
     mCurrentState.sequence = 0;
     mCurrentState.transform.set(0, 0);
     mCurrentState.requested = mCurrentState.active;
+
+#ifdef MTK_MT6589
+    mCurrentState.flagsEx = layer_state_t::eExInitValue;
+    mCurrentState.usageEx = EXTRA_USAGE_INIT_VALUE;
+    mCurrentState.stConnectedApi = BufferQueue::NO_CONNECTED_API;
+    mCurrentState.stCurrentTransform = Transform::ROT_INVALID;
+    mBufferRefCount = 0;
+#endif
 
     // drawing state & current state are identical
     mDrawingState = mCurrentState;
@@ -136,6 +154,11 @@ void Layer::onFirstRef() {
   #endif
 #endif
 
+#ifdef MTK_MT6589
+    // workaround to use quad buffer for SF layer
+    mSurfaceFlingerConsumer->setDefaultMaxBufferCount(4);
+#endif
+
     const sp<const DisplayDevice> hw(mFlinger->getDefaultDisplayDevice());
     updateTransformHint(hw);
 }
@@ -158,6 +181,11 @@ void Layer::onLayerDisplayed(const sp<const DisplayDevice>& hw,
     if (layer) {
         layer->onDisplayed();
         mSurfaceFlingerConsumer->setReleaseFence(layer->getAndResetReleaseFence());
+
+#ifdef MTK_MT6589
+        if (mActiveBuffer != NULL)
+		mActiveBuffer->setMva(layer->getMva());
+#endif
     }
 }
 
@@ -450,6 +478,16 @@ void Layer::setGeometry(
     } else {
         layer.setTransform(orientation);
     }
+
+#ifdef MTK_MT6589
+    hwc_color_t color;
+    color.a = s.alpha;
+    layer.setFillColor(color);
+    layer.setTransform(orientation);
+    layer.setMatrix(tr);
+    layer.setIdentity (getIdentity ());
+    layer.setSecure((isSecure() || isProtected()));
+#endif
 }
 
 
@@ -516,6 +554,10 @@ void Layer::setPerFrameData(const sp<const DisplayDevice>& hw,
     // NOTE: buffer can be NULL if the client never drew into this
     // layer yet, or if we ran out of memory
     layer.setBuffer(mActiveBuffer);
+#ifdef MTK_MT6589
+    layer.setConnectedApi(mSurfaceFlingerConsumer->getConnectedApi());
+    layer.setDirty((mBufferDirty || mBufferRefCount <= 1 || contentDirty));
+#endif
 }
 
 void Layer::setAcquireFence(const sp<const DisplayDevice>& hw,
@@ -1245,6 +1287,14 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions)
         const Layer::State& s(getDrawingState());
         Region dirtyRegion(Rect(s.active.w, s.active.h));
 
+#ifdef MTK_MT6589
+        // store buffer dirty infomation and pass to hwc later
+        mBufferDirty = !dirtyRegion.isEmpty();
+        if (mBufferDirty == true){
+            // LazySwap(5) increment buffer ref count when the texture is created
+            mBufferRefCount++;
+        }
+#endif
         // transform the dirty region to window-manager space
         outDirtyRegion = (s.transform.transform(dirtyRegion));
     }

@@ -17,6 +17,7 @@
 #ifndef ANDROID_LAYER_H
 #define ANDROID_LAYER_H
 
+
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -109,6 +110,13 @@ public:
         // dependent.
         Region activeTransparentRegion;
         Region requestedTransparentRegion;
+
+#ifdef MTK_MT6589
+        uint32_t flagsEx;
+        uint32_t usageEx;
+        uint32_t stConnectedApi;
+        uint32_t stCurrentTransform;
+#endif
     };
 
     // -----------------------------------------------------------------------
@@ -299,6 +307,10 @@ public:
     //GPUTileRect : Return true if the layer has been updated in this frame.
     bool hasNewFrame() const;
 #endif
+#ifdef MTK_MT6589
+    bool mBufferDirty;
+    mutable uint64_t mBufferRefCount;
+#endif
 
 protected:
     // constant
@@ -391,6 +403,11 @@ private:
     const wp<Client> mClientRef;
     // Transform hint assigned for the layer
     uint32_t mTransformHint;
+
+#ifdef MTK_MT6589
+    const uint32_t mIdentity;uint32_t getIdentity() const { return mIdentity; }
+    static int32_t sIdentity;
+#endif
 };
 
 // ---------------------------------------------------------------------------
