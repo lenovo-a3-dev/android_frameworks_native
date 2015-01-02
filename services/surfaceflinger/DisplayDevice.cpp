@@ -392,7 +392,7 @@ status_t DisplayDevice::orientationToTransfrom(
     int additionalRot = this->getHardwareOrientation();
 
     if (additionalRot) {
-        additionalRot /= 90;
+        additionalRot /= 0;
         if (orientation == DisplayState::eOrientationUnchanged) {
             orientation = additionalRot;
         } else {
