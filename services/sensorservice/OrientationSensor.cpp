@@ -53,8 +53,8 @@ bool OrientationSensor::process(sensors_event_t* outEvent,
                 g[0] += 360;
 
             *outEvent = event;
-            outEvent->orientation.azimuth = g.x;
-            outEvent->orientation.pitch   = g.y;
+            outEvent->orientation.azimuth = g.y;
+            outEvent->orientation.pitch   = g.x;
             outEvent->orientation.roll    = g.z;
             outEvent->orientation.status  = SENSOR_STATUS_ACCURACY_HIGH;
             outEvent->sensor = '_ypr';
